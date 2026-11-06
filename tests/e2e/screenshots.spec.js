@@ -22,8 +22,8 @@ for (const scheme of ["light", "dark"]) {
     await page.getByRole("button", { name: "Log", exact: true }).click();
     await shot("log");
     await page.getByRole("button", { name: "Chart", exact: true }).click();
-    const box = await page.locator("#chart svg").boundingBox();
-    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height / 2);
+    // locator.click retries if the chart is redrawn (e.g. on resize) mid-action.
+    await page.locator("#chart svg").click();
     await shot("chart");
     await page.getByRole("button", { name: "Data", exact: true }).click();
     await shot("data");

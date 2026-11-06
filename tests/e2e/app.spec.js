@@ -106,8 +106,9 @@ test("chart shows at most three people and keeps colours stable", async ({ page 
   await expect(chip("Dan").locator(".dot")).toHaveClass(/b1/);
 
   // Tapping the chart shows a readout for each person.
-  const box = await page.locator("#chart svg").boundingBox();
-  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
+  const svg = page.locator("#chart svg");
+  const width = await svg.evaluate((el) => el.getBoundingClientRect().width);
+  await svg.click({ position: { x: width * 0.6, y: 150 } });
   await expect(page.locator("#readout .values > span")).toHaveCount(3);
   await expect(page.locator("#readout")).toContainText("Dan:");
 
