@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Track weight for several people and chart it over time. Data stays in your browser.">
+  <meta name="color-scheme" content="light dark">
+  <title>Weigh In</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Weigh In</h1>
+    <button type="button" id="header-export" class="btn btn-small" hidden>Export</button>
+  </header>
+
+  <div id="banner" class="banner" role="status" hidden></div>
+
+  <main id="view" tabindex="-1"></main>
+
+  <nav class="tabs" aria-label="Sections">
+    <button type="button" data-tab="log">Log</button>
+    <button type="button" data-tab="chart">Chart</button>
+    <button type="button" data-tab="people">People</button>
+    <button type="button" data-tab="data">Data</button>
+  </nav>
+
+  <dialog id="dialog">
+    <form method="dialog" id="dialog-form">
+      <h2 id="dialog-title"></h2>
+      <div id="dialog-body"></div>
+      <p id="dialog-error" class="field-error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-quiet" id="dialog-cancel">Cancel</button>
+        <button type="submit" class="btn" id="dialog-ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <noscript><p class="banner">Weigh In needs JavaScript turned on.</p></noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
