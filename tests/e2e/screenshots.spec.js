@@ -4,7 +4,7 @@ import { test } from "@playwright/test";
 for (const scheme of ["light", "dark"]) {
   test(`screenshots (${scheme})`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme });
-    await page.goto("/");
+    await page.goto("./");
     await page.evaluate(() => {
       const iso = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
       const people = [{ id: 1, name: "Alice" }, { id: 2, name: "Bob" }, { id: 3, name: "Charlotte" }];

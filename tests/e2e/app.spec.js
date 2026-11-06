@@ -34,7 +34,7 @@ async function logWeight(page, name, kg, date) {
 }
 
 test("first launch opens People and rejects duplicate names", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await expect(page.getByRole("heading", { name: "People" })).toBeVisible();
   await addPeople(page, "Alice", "alice");
   await expect(page.locator("#person-error")).toHaveText("That name is already used");
@@ -42,7 +42,7 @@ test("first launch opens People and rejects duplicate names", async ({ page }) =
 });
 
 test("logs for today by default and survives a reload", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await addPeople(page, "Alice");
   await page.getByRole("button", { name: "Log", exact: true }).click();
   await expect(page.locator("#date")).toHaveValue(today());
@@ -60,7 +60,7 @@ test("logs for today by default and survives a reload", async ({ page }) => {
 });
 
 test("date can be changed, entries can be edited and deleted with undo", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await addPeople(page, "Alice");
   await logWeight(page, "Alice", "70", daysAgo(10));
   await expect(page.locator(`#history li[data-date="${daysAgo(10)}"]`)).toContainText("70.0 kg");
@@ -82,7 +82,7 @@ test("date can be changed, entries can be edited and deleted with undo", async (
 });
 
 test("chart shows at most three people and keeps colours stable", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await addPeople(page, "Ann", "Ben", "Cat", "Dan");
   for (const [i, n] of ["Ann", "Ben", "Cat", "Dan"].entries()) {
     await logWeight(page, n, String(70 + i), daysAgo(3));
@@ -118,7 +118,7 @@ test("chart shows at most three people and keeps colours stable", async ({ page 
 });
 
 test("export downloads JSON that import restores after storage is cleared", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await addPeople(page, "Alice", "Bob");
   await logWeight(page, "Alice", "70.5", daysAgo(2));
   await logWeight(page, "Bob", "88");
@@ -148,7 +148,7 @@ test("export downloads JSON that import restores after storage is cleared", asyn
 });
 
 test("importing over existing data asks before replacing; bad files are refused", async ({ page }, info) => {
-  await page.goto("/");
+  await page.goto("./");
   await addPeople(page, "Zed");
   await page.getByRole("button", { name: "Data", exact: true }).click();
 
@@ -171,12 +171,12 @@ test("warns when browser storage is unavailable", async ({ page }) => {
   await page.addInitScript(() => {
     Storage.prototype.setItem = () => { throw new DOMException("blocked", "SecurityError"); };
   });
-  await page.goto("/");
+  await page.goto("./");
   await expect(page.locator("#banner")).toContainText("isn't saving your data");
 });
 
 test("nags to back up once there are unexported entries", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await addPeople(page, "Alice");
   for (let i = 0; i < 5; i++) await logWeight(page, "Alice", String(70 + i), daysAgo(i));
   await expect(page.locator("#banner")).toContainText("haven't backed up yet");
@@ -186,7 +186,7 @@ test("nags to back up once there are unexported entries", async ({ page }) => {
 });
 
 test("deleting a person asks first and removes their entries", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await addPeople(page, "Alice", "Bob");
   await logWeight(page, "Alice", "70");
   await page.getByRole("button", { name: "People", exact: true }).click();
@@ -202,7 +202,7 @@ test("deleting a person asks first and removes their entries", async ({ page }) 
 
 test("no horizontal scrolling at phone width", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 740 });
-  await page.goto("/");
+  await page.goto("./");
   await addPeople(page, "Alexandria-Marguerite", "Bob");
   await logWeight(page, "Alexandria-Marguerite", "70", daysAgo(5));
   await logWeight(page, "Alexandria-Marguerite", "71");

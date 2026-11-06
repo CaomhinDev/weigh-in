@@ -27,13 +27,14 @@ JavaScript modules.
 ```sh
 npm test             # data and chart logic (Node's built-in test runner)
 npm run test:e2e     # browser tests in headless Chromium (Playwright)
+BASE_URL=https://caomhindev.github.io/weigh-in/ npm run test:e2e   # against the live site
 ```
 
 The browser tests also save light/dark screenshots to `screenshots/`.
 
 ## Deploy
 
-Hosted on GitHub Pages. Every push to `main` runs all tests, and publishes
+Live at https://caomhindev.github.io/weigh-in/ (GitHub Pages). Every push to `main` runs all tests, and publishes
 the site only if they pass (`.github/workflows/deploy.yml`). Only
 `index.html`, `styles.css`, `icon.svg` and `js/` are published.
 
