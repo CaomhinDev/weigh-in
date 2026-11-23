@@ -169,3 +169,63 @@ export function parseState(text) {
   state.nextId = Math.max(0, ...ids) + 1;
   return state;
 }
+
+// ---- Cloud sync helpers ----
+//
+// In the cloud each person and entry is its own document. Entries are keyed by
+// person and day (one per person per day, as logWeight keeps them), so two
+// devices logging the same day can't create duplicates.
+
+export const entryKey = (e) => `${e.personId}_${e.date}`;
+export const validEmail = (s) => typeof s === "string" && s.length <= 254 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
+
+/** A random id, so devices adding people or entries at the same time don't collide. */
+export function randomId(rand = () => crypto.getRandomValues(new Uint32Array(2))) {
+  const [hi, lo] = rand();
+  return (hi % 2 ** 16) * 2 ** 32 + lo + 1; // 1 … 2^48, a safe integer
+}
+
+export function cloneState(state) {
+  return {
+    nextId: state.nextId,
+    people: state.people.map((p) => ({ ...p })),
+    entries: state.entries.map((e) => ({ ...e })),
+  };
+}
+
+/** The document writes that turn `before` into `after`: [{ op: "set" | "delete", kind, id, data }]. */
+export function diffState(before, after) {
+  const ops = [];
+  const oldPeople = new Map(before.people.map((p) => [p.id, p]));
+  const newPeople = new Map(after.people.map((p) => [p.id, p]));
+  for (const [id, p] of newPeople) {
+    const o = oldPeople.get(id);
+    if (!o || o.name !== p.name) ops.push({ op: "set", kind: "people", id: String(id), data: { id, name: p.name } });
+  }
+  const oldEntries = new Map(before.entries.map((e) => [entryKey(e), e]));
+  const newEntries = new Map(after.entries.map((e) => [entryKey(e), e]));
+  for (const [key, e] of newEntries) {
+    const o = oldEntries.get(key);
+    if (!o || o.kg !== e.kg || o.id !== e.id) {
+      ops.push({ op: "set", kind: "entries", id: key, data: { id: e.id, personId: e.personId, date: e.date, kg: e.kg } });
+    }
+  }
+  for (const key of oldEntries.keys()) if (!newEntries.has(key)) ops.push({ op: "delete", kind: "entries", id: key });
+  for (const id of oldPeople.keys()) if (!newPeople.has(id)) ops.push({ op: "delete", kind: "people", id: String(id) });
+  return ops;
+}
+
+/** Builds app state from cloud documents, skipping anything malformed. */
+export function stateFromDocs(peopleDocs, entryDocs) {
+  const people = peopleDocs
+    .filter((p) => Number.isSafeInteger(p?.id) && p.id > 0 && typeof p.name === "string" && p.name.trim())
+    .map((p) => ({ id: p.id, name: p.name.trim() }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+  const ids = new Set(people.map((p) => p.id));
+  // While a person is being deleted their entries may briefly outlive them: hide those.
+  const entries = entryDocs
+    .filter((e) => Number.isSafeInteger(e?.id) && ids.has(e.personId) && isValidISODate(e.date)
+      && typeof e.kg === "number" && e.kg > 0 && e.kg < MAX_KG)
+    .map((e) => ({ id: e.id, personId: e.personId, date: e.date, kg: e.kg }));
+  return { nextId: 1, people, entries };
+}

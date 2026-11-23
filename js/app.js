@@ -1,12 +1,28 @@
 import * as S from "./store.js";
 import { MAX_CHART_PEOPLE, toggleSlot, niceTicks, spreadLabels, nearestBy } from "./chart-math.js";
 import * as storage from "./storage.js";
+import { cloudAvailable } from "./firebase-config.js";
 
 // ---------------------------------------------------------------- state
+//
+// Two modes:
+//   local – data lives in this browser's localStorage only (anyone can use it).
+//   cloud – signed in with Google; data lives in the user's own private space in
+//           Firestore. Only people the admin has invited get in.
+// mode null = not chosen yet (first visit): the start screen offers both.
 
 const loaded = storage.loadState();
 const app = {
+  mode: initialMode(),
   state: loaded.state,
+  // Cloud mode
+  user: null,
+  access: "checking", // "checking" | "signed-out" | "denied" | "unverifiable" | "no-cloud" | "allowed"
+  authError: null,
+  role: null, // "admin" | "member"
+  cloudLoaded: false,
+  syncError: null,
+  members: [], // admin: the invite list
   meta: storage.loadMeta(),
   loadProblem: loaded.problem,
   storageOk: storage.storageAvailable(),
@@ -27,6 +43,14 @@ app.slots = Array.isArray(app.meta.ui.slots) && app.meta.ui.slots.length === MAX
 // Until someone picks people on the chart, it shows the first few with data.
 app.slotsChosen = app.meta.ui.slotsChosen === true;
 
+function initialMode() {
+  if (!cloudAvailable) return "local";
+  const m = storage.loadMode();
+  if (m === "local" || m === "cloud") return m;
+  // People who used the app before sign-in existed carry on as they were.
+  return loaded.state.people.length ? "local" : null;
+}
+
 function defaultSlots() {
   const withData = app.state.people
     .filter((p) => app.state.entries.some((e) => e.personId === p.id))
@@ -37,10 +61,30 @@ function defaultSlots() {
 
 /** Applies a data change, saves it, and redraws. */
 function commit(mutate) {
+  if (app.mode === "cloud") return commitCloud(mutate);
   mutate(app.state);
   app.storageOk = storage.saveState(app.state);
   app.meta.changesSinceExport = (app.meta.changesSinceExport ?? 0) + 1;
   saveMeta();
+  render();
+}
+
+/**
+ * Cloud: apply the change on screen straight away, then write just the documents
+ * that changed. Writes made offline are queued and sent later by Firestore.
+ */
+function commitCloud(mutate) {
+  const before = S.cloneState(app.state);
+  app.state.nextId = S.randomId(); // ids made on different devices mustn't collide
+  mutate(app.state);
+  const ops = S.diffState(before, app.state);
+  if (ops.length) {
+    cloud.applyChanges(app.user.uid, ops).catch((e) => {
+      console.error(e);
+      app.syncError = `Couldn't save a change: ${e.code === "permission-denied" ? "not allowed" : e.message}`;
+      render();
+    });
+  }
   render();
 }
 
@@ -142,13 +186,19 @@ async function importFile(file) {
     dialog.addEventListener("close", () => (document.getElementById("dialog-cancel").hidden = false), { once: true });
     return;
   }
+  confirmReplace(incoming, { title: "Import this file?", source: "The file has" });
+}
+
+/** Asks, then replaces the current data (this browser's, or the account's) with `incoming`. */
+function confirmReplace(incoming, { title, source }) {
   const cur = app.state;
   const hasData = cur.people.length > 0;
+  const where = app.mode === "cloud" ? "your account" : "this browser";
   openDialog({
-    title: "Import this file?",
+    title,
     body: [
-      h("p", {}, `The file has ${plural(incoming.people.length, "person", "people")} and ${plural(incoming.entries.length, "entry", "entries")}.`),
-      hasData && h("p", {}, `It will replace what's in this browser now (${plural(cur.people.length, "person", "people")}, ${plural(cur.entries.length, "entry", "entries")}). Export first if you want to keep a copy.`),
+      h("p", {}, `${source} ${plural(incoming.people.length, "person", "people")} and ${plural(incoming.entries.length, "entry", "entries")}.`),
+      hasData && h("p", {}, `It will replace what's in ${where} now (${plural(cur.people.length, "person", "people")}, ${plural(cur.entries.length, "entry", "entries")}). Export first if you want to keep a copy.`),
     ],
     okLabel: hasData ? "Replace" : "Import",
     danger: hasData,
@@ -169,15 +219,33 @@ async function importFile(file) {
 
 const view = document.getElementById("view");
 
+const isAdmin = () => app.mode === "cloud" && app.role === "admin";
+
 function render() {
+  const tabs = document.querySelector(".tabs");
+  const headerExport = document.getElementById("header-export");
+  if (app.mode == null || (app.mode === "cloud" && app.access !== "allowed")) {
+    tabs.hidden = true;
+    headerExport.hidden = true;
+    document.getElementById("banner").hidden = true;
+    view.replaceChildren(viewGate());
+    return;
+  }
+  tabs.hidden = false;
+  tabs.querySelector('[data-tab="admin"]').hidden = !isAdmin();
+  if (app.tab === "admin" && !isAdmin()) app.tab = "log";
   renderBanner();
   for (const b of document.querySelectorAll(".tabs button")) {
     b.toggleAttribute("aria-current", false);
     if (b.dataset.tab === app.tab) b.setAttribute("aria-current", "page");
   }
-  const headerExport = document.getElementById("header-export");
+  if (app.mode === "cloud" && !app.cloudLoaded) {
+    headerExport.hidden = true;
+    view.replaceChildren(h("p", { class: "muted", id: "loading" }, "Loading your data…"));
+    return;
+  }
   headerExport.hidden = app.state.people.length === 0;
-  const views = { log: viewLog, chart: viewChart, people: viewPeople, data: viewData };
+  const views = { log: viewLog, chart: viewChart, people: viewPeople, data: viewData, admin: viewAdmin };
   view.replaceChildren(views[app.tab]());
   if (app.tab === "chart") mountChart();
 }
@@ -187,7 +255,11 @@ function renderBanner() {
   const exportBtn = h("button", { type: "button", class: "btn btn-small", onclick: exportData }, "Export now");
   const m = app.meta;
   let content = null;
-  if (!app.storageOk) {
+  if (app.mode === "cloud") {
+    // Data is in the account, so the browser-storage warnings and backup nags don't apply.
+    content = app.syncError && [h("span", {}, app.syncError),
+      h("button", { type: "button", class: "btn btn-small btn-quiet", onclick: () => { app.syncError = null; render(); } }, "Dismiss")];
+  } else if (!app.storageOk) {
     content = [h("span", {}, "This browser isn't saving your data (storage is blocked or full). Export to keep it."), app.state.people.length && exportBtn];
   } else if (app.loadProblem) {
     content = [h("span", {}, app.loadProblem), h("button", { type: "button", class: "btn btn-small btn-quiet", onclick: () => { app.loadProblem = null; render(); } }, "Dismiss")];
@@ -369,40 +441,161 @@ function deleteDialog(p, n) {
 function viewData() {
   const st = app.state;
   const m = app.meta;
+  const cloudMode = app.mode === "cloud";
+  const where = cloudMode ? "your account" : "this browser";
   const fileInput = h("input", {
     type: "file", accept: ".json,application/json", id: "import-file", class: "visually-hidden",
     onchange: (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) importFile(f); },
   });
+  const local = cloudMode ? storage.loadState().state : null; // this browser's own data, if any
   return h("section", {},
     h("h2", {}, "Your data"),
-    h("div", { class: "card" },
-      h("p", {}, "Everything is stored in this browser on this device only. Nothing is sent anywhere."),
-      h("p", { class: "muted small", id: "storage-status" },
-        app.storageOk ? "✓ Saving automatically in browser storage." : "✗ Browser storage isn't available. Export to keep your data.",
-        app.persisted === true ? " The browser has agreed not to clear it automatically." : "",
-        app.persisted === false ? " The browser may clear it if space runs low or site data is cleared." : ""),
-      h("p", { class: "muted small", style: "margin:0" }, `${plural(st.people.length, "person", "people")}, ${plural(st.entries.length, "entry", "entries")}.`)),
+    cloudMode
+      ? h("div", { class: "card", id: "account" },
+          h("p", {}, "Signed in as ", h("strong", {}, app.user.email), "."),
+          h("p", {}, "Your data is stored in your own private space online. Only you can see it, and it's the same on every device you sign in on."),
+          h("p", { class: "muted small" }, `${plural(st.people.length, "person", "people")}, ${plural(st.entries.length, "entry", "entries")}.`),
+          h("button", { type: "button", class: "btn btn-quiet", id: "sign-out", onclick: signOut }, "Sign out"))
+      : h("div", { class: "card" },
+          h("p", {}, "Everything is stored in this browser on this device only. Nothing is sent anywhere."),
+          h("p", { class: "muted small", id: "storage-status" },
+            app.storageOk ? "✓ Saving automatically in browser storage." : "✗ Browser storage isn't available. Export to keep your data.",
+            app.persisted === true ? " The browser has agreed not to clear it automatically." : "",
+            app.persisted === false ? " The browser may clear it if space runs low or site data is cleared." : ""),
+          h("p", { class: "muted small", style: "margin:0" }, `${plural(st.people.length, "person", "people")}, ${plural(st.entries.length, "entry", "entries")}.`)),
+    !cloudMode && cloudAvailable && [
+      h("h3", {}, "Sign in"),
+      h("p", {}, "Been invited? Sign in with Google to keep your data in your own private account and use it on any device. Your data in this browser stays here, and you can copy it in after signing in."),
+      h("button", { type: "button", class: "btn", id: "go-sign-in", onclick: chooseCloud }, "Sign in…")],
+    cloudMode && local.people.length > 0 && [
+      h("h3", {}, "Data saved in this browser"),
+      h("p", {}, `This browser also has data from using Weigh In without signing in (${plural(local.people.length, "person", "people")}, ${plural(local.entries.length, "entry", "entries")}).`),
+      h("button", {
+        type: "button", class: "btn btn-quiet", id: "copy-local",
+        onclick: () => confirmReplace(storage.loadState().state, { title: "Copy into your account?", source: "This browser has" }),
+      }, "Copy it into my account")],
     h("h3", {}, "Back up"),
     h("p", {}, "Download everything as a JSON file. Keep it somewhere safe, or use it to move to another browser or device."),
     h("p", { class: "muted small" }, m.lastExportAt
-      ? `Last export: ${longDate.format(new Date(m.lastExportAt))}${m.changesSinceExport ? ` (${plural(m.changesSinceExport, "change")} since)` : " (up to date)"}.`
+      ? `Last export: ${longDate.format(new Date(m.lastExportAt))}${m.changesSinceExport && !cloudMode ? ` (${plural(m.changesSinceExport, "change")} since)` : cloudMode ? "" : " (up to date)"}.`
       : "Not exported yet."),
     h("button", { type: "button", class: "btn", id: "export", onclick: exportData, disabled: st.people.length === 0 }, "Export JSON"),
     h("h3", {}, "Restore"),
-    h("p", {}, "Load a JSON file you exported earlier. It replaces the data in this browser."),
+    h("p", {}, `Load a JSON file you exported earlier. It replaces the data in ${where}.`),
     fileInput,
     h("label", { for: "import-file", class: "btn btn-quiet", style: "display:inline-flex;align-items:center;margin:0" }, "Import JSON…"),
     st.people.length > 0 && [
       h("h3", {}, "Start over"),
       h("button", {
-        type: "button", class: "btn btn-danger",
+        type: "button", class: "btn btn-danger", id: "delete-all",
         onclick: () => openDialog({
           title: "Delete all data?",
-          body: h("p", {}, "This removes every person and entry from this browser. Export first if you might want it back."),
+          body: h("p", {}, `This removes every person and entry from ${where}. Export first if you might want it back.`),
           okLabel: "Delete everything", danger: true,
           onOk: () => { commit((st) => Object.assign(st, S.emptyState())); app.slots = defaultSlots(); app.slotsChosen = false; saveMeta(); },
         }),
       }, "Delete all data")]);
+}
+
+// ---- Admin (cloud, admin only): who's invited
+
+function viewAdmin() {
+  const email = h("input", { id: "member-email", type: "email", autocomplete: "off", maxlength: 254, placeholder: "name@gmail.com", "aria-label": "Google email address" });
+  const name = h("input", { id: "member-name", autocomplete: "off", maxlength: 60, placeholder: "Name (optional)", "aria-label": "Name" });
+  const err = h("p", { class: "field-error", hidden: true, id: "member-error" });
+  const form = h("form", {
+    novalidate: true,
+    onsubmit: async (e) => {
+      e.preventDefault();
+      const address = email.value.trim().toLowerCase();
+      const problem = !S.validEmail(address) ? "Enter their Google (Gmail) address"
+        : app.members.some((p) => p.email === address) ? "That address is already invited" : null;
+      if (problem) { err.textContent = problem; err.hidden = false; email.focus(); return; }
+      err.hidden = true;
+      try {
+        await cloud.addMember(address, name.value, app.user.email);
+        email.value = "";
+        name.value = "";
+      } catch (x) {
+        err.textContent = `Couldn't invite ${address}: ${x.code === "permission-denied" ? "not allowed" : x.message}`;
+        err.hidden = false;
+      }
+    },
+  },
+    h("label", { for: "member-email" }, "Invite someone"),
+    h("div", { class: "field" }, email),
+    h("div", { class: "field" }, name),
+    h("button", { type: "submit", class: "btn btn-block", id: "member-add" }, "Invite"),
+    err);
+  const members = [...app.members].sort((a, b) => (a.role === "admin" ? -1 : b.role === "admin" ? 1 : a.email.localeCompare(b.email)));
+  return h("section", { id: "admin" },
+    h("h2", {}, "Who can sign in"),
+    h("p", { class: "muted small" }, "Invited people sign in with that Google account and get their own private data. You can't see their data, and they can't see each other's."),
+    h("div", { class: "card" }, form),
+    h("ul", { class: "list", id: "members" }, members.map((p) => h("li", { "data-email": p.email },
+      h("div", { class: "main" },
+        h("div", { class: "primary" }, p.name || p.email, p.role === "admin" && " (admin)"),
+        p.name && h("div", { class: "secondary" }, p.email)),
+      p.role !== "admin" && h("button", {
+        type: "button", class: "icon-btn", "aria-label": `Remove ${p.email}`,
+        onclick: () => openDialog({
+          title: `Remove ${p.name || p.email}?`,
+          body: h("p", {}, "They won't be able to sign in any more. Their data is kept but nobody can see it. Invite them again to give it back."),
+          okLabel: "Remove", danger: true,
+          onOk: () => { cloud.removeMember(p.email).catch((x) => { app.syncError = `Couldn't remove: ${x.message}`; render(); }); },
+        }),
+      }, "Remove")))),
+    h("p", { class: "muted small" }, "The admin's own invite is managed in the Firebase console."));
+}
+
+// ---- Start screen (sign in, or use without an account)
+
+function viewGate() {
+  const signInBtn = h("button", {
+    type: "button", class: "btn btn-block", id: "sign-in",
+    onclick: async () => {
+      app.authError = null;
+      try {
+        await ensureCloud();
+        await cloud.signIn();
+      } catch (e) {
+        app.authError = e?.message ?? String(e);
+        render();
+      }
+    },
+  }, "Sign in with Google");
+  const localBtn = h("button", { type: "button", class: "btn btn-quiet btn-block", id: "use-local", onclick: chooseLocal }, "Use without signing in");
+  const localNote = h("p", { class: "muted small" }, "Without signing in, your data is kept in this browser on this device only.");
+  const choose = [
+    h("p", {}, "Track weight for several people and chart it over time."),
+    h("p", { class: "muted" }, "Sign in with the Google account you were invited with. Your data is private to you and available on all your devices."),
+    signInBtn, localBtn, localNote,
+  ];
+  const access = app.mode == null ? "choose" : app.access;
+  const screens = {
+    choose,
+    "signed-out": choose,
+    checking: [h("p", { class: "muted" }, "Checking your account…")],
+    denied: [
+      h("p", {}, h("strong", {}, app.user?.email), " hasn't been invited."),
+      h("p", { class: "muted" }, "Ask the admin to invite this Google account, or sign in with a different one."),
+      h("button", { type: "button", class: "btn btn-block", onclick: signOut }, "Use a different account"),
+      localBtn, localNote,
+    ],
+    unverifiable: [
+      h("p", {}, "Can't check your account while offline."),
+      h("button", { type: "button", class: "btn btn-block", onclick: () => location.reload() }, "Try again"),
+      localBtn,
+    ],
+    "no-cloud": [
+      h("p", {}, "Can't reach Google right now. Check your connection and try again."),
+      h("button", { type: "button", class: "btn btn-block", onclick: () => location.reload() }, "Try again"),
+      localBtn, localNote,
+    ],
+  };
+  return h("section", { class: "gate", id: "gate", "data-access": access },
+    screens[access] ?? screens.checking,
+    app.authError && h("p", { class: "field-error", role: "alert" }, app.authError));
 }
 
 // ---- Chart
@@ -626,7 +819,7 @@ document.getElementById("header-export").addEventListener("click", exportData);
 
 // Another tab changed the data: pick it up.
 window.addEventListener("storage", (e) => {
-  if (e.key !== storage.STORAGE_KEYS.DATA_KEY) return;
+  if (app.mode !== "local" || e.key !== storage.STORAGE_KEYS.DATA_KEY) return;
   const fresh = storage.loadState();
   if (!fresh.problem) {
     app.state = fresh.state;
@@ -635,9 +828,149 @@ window.addEventListener("storage", (e) => {
   }
 });
 
-storage.requestPersistence().then((ok) => {
-  app.persisted = ok;
-  if (app.tab === "data") render();
-});
+// ---------------------------------------------------------------- cloud
 
+let cloud = null;
+let cloudLoading = null;
+let stopWatching = null;
+let leaving = false; // signing out: the page is about to reload
+
+/** Loads Firebase (only once someone wants to sign in) and follows the signed-in user. */
+function ensureCloud() {
+  cloudLoading ??= import("./cloud.js").then((mod) => {
+    cloud = mod;
+    if (cloud.isEmulator) window.__weighin = { signInAs: cloud.testSignIn };
+    cloud.onUser((user) => { if (app.mode !== "local" && !leaving) startAccount(user); });
+  }, (e) => {
+    console.warn("Firebase unavailable:", e);
+    cloudLoading = null;
+    app.access = "no-cloud";
+    render();
+    throw e;
+  });
+  return cloudLoading;
+}
+
+function stopAccount() {
+  stopWatching?.();
+  stopWatching = null;
+}
+
+async function startAccount(user) {
+  stopAccount();
+  app.user = user;
+  app.cloudLoaded = false;
+  app.syncError = null;
+  document.body.dataset.sync = "";
+  if (!user) {
+    app.access = "signed-out";
+    app.role = null;
+    return render();
+  }
+  if (app.mode !== "cloud") {
+    app.mode = "cloud";
+    storage.saveMode("cloud");
+  }
+  app.access = "checking";
+  render();
+  const access = await cloud.getAccess(user);
+  if (app.user !== user) return;
+  if (access === null) { app.access = "unverifiable"; return render(); }
+  if (access === false) { app.access = "denied"; return render(); }
+  app.access = "allowed";
+  app.role = access.role;
+  app.state = S.emptyState();
+  render();
+
+  const lost = (e) => {
+    stopAccount();
+    if (app.user !== user) return;
+    // Removed from the invite list while signed in: the rules start refusing reads.
+    if (e?.code === "permission-denied") { app.access = "denied"; return render(); }
+    console.error(e);
+    app.syncError = `Couldn't load your data: ${e.message}. Reload to try again.`;
+    render();
+  };
+  const subs = [cloud.watchData(user.uid, (docs) => {
+    const fresh = S.stateFromDocs(docs.people, docs.entries);
+    const same = app.cloudLoaded && JSON.stringify([fresh.people, fresh.entries]) === JSON.stringify([app.state.people, app.state.entries]);
+    if (same) return; // our own write coming back: already on screen
+    // Chart picks remembered from using the app without signing in don't apply here.
+    if (!app.cloudLoaded && !app.slots.some((id) => fresh.people.some((p) => p.id === id))) app.slotsChosen = false;
+    app.state = fresh;
+    app.cloudLoaded = true;
+    document.body.dataset.sync = "ready";
+    rerenderKeepingInput();
+  }, lost)];
+  subs.push(cloud.watchAccess(user, (now) => {
+    if (now === false) return lost({ code: "permission-denied" }); // removed by the admin
+    if (now.role !== app.role) { stopAccount(); startAccount(user); } // role changed in the console
+  }, lost));
+  if (app.role === "admin") {
+    subs.push(cloud.watchMembers((members) => {
+      app.members = members;
+      if (app.tab === "admin") rerenderKeepingInput();
+    }, (e) => console.error(e)));
+  }
+  stopWatching = () => subs.forEach((u) => u());
+}
+
+/** Redraws after a change from elsewhere (another device), keeping half-typed input and focus. */
+function rerenderKeepingInput() {
+  const typed = new Map([...view.querySelectorAll("input[id]:not([type=file])")].map((el) => [el.id, el.value]));
+  const focused = view.contains(document.activeElement) ? document.activeElement.id : null;
+  const tab = app.tab;
+  const y = window.scrollY;
+  render();
+  if (app.tab !== tab) return;
+  for (const [id, v] of typed) {
+    const el = document.getElementById(id);
+    if (el && view.contains(el) && v && !el.value && el.type !== "date") el.value = v;
+  }
+  if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
+  window.scrollTo(0, y);
+}
+
+/** Signs out, wipes this browser's offline copy of the account data, and starts afresh. */
+async function signOut() {
+  leaving = true;
+  stopAccount();
+  app.access = "checking";
+  render();
+  try { await cloud?.signOut(); } finally { location.reload(); }
+}
+
+/** From the start screen or after being refused: use this browser's storage instead. */
+async function chooseLocal() {
+  storage.saveMode("local");
+  if (app.user) return signOut(); // reloads into local mode
+  stopAccount();
+  app.mode = "local";
+  app.state = storage.loadState().state;
+  app.slotsChosen = false;
+  app.tab = app.state.people.length ? "log" : "people";
+  saveMeta();
+  render();
+}
+
+/** From local mode: go to the sign-in screen. Local data stays in this browser. */
+function chooseCloud() {
+  storage.saveMode("cloud");
+  app.mode = "cloud";
+  app.access = cloud ? "signed-out" : "checking";
+  render();
+  ensureCloud().catch(() => {});
+}
+
+// ---------------------------------------------------------------- start
+
+if (app.mode === "local") {
+  storage.requestPersistence().then((ok) => {
+    app.persisted = ok;
+    if (app.tab === "data" && app.mode === "local") render();
+  });
+} else {
+  // Signing in, or choosing: load Firebase now so the sign-in popup opens straight from the tap.
+  ensureCloud().catch(() => {});
+}
 render();

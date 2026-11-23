@@ -94,3 +94,63 @@ test("import rejects bad files with readable messages", () => {
   assert.throws(() => S.parseState(bad({ entries: [{ id: 1, personId: 1, date: day, kg: 70 }] })), /Duplicate id/);
   assert.equal(S.parseState(JSON.stringify(ok)).entries.length, 1);
 });
+
+// ---- cloud sync helpers
+
+test("diffState writes only what changed, keyed by person and day", () => {
+  const st = S.emptyState();
+  const a = S.addPerson(st, "Alice").person;
+  const b = S.addPerson(st, "Bob").person;
+  S.logWeight(st, a.id, day, 70);
+  S.logWeight(st, b.id, day, 90);
+  const before = S.cloneState(st);
+
+  S.logWeight(st, a.id, day, 69.5); // same day: replaces
+  S.renamePerson(st, b.id, "Robert");
+  const ops = S.diffState(before, st);
+  assert.deepEqual(ops, [
+    { op: "set", kind: "people", id: String(b.id), data: { id: b.id, name: "Robert" } },
+    { op: "set", kind: "entries", id: `${a.id}_${day}`, data: { id: st.entries[0].id, personId: a.id, date: day, kg: 69.5 } },
+  ]);
+  assert.deepEqual(S.diffState(st, S.cloneState(st)), []);
+});
+
+test("diffState deletes a person together with their entries", () => {
+  const st = S.emptyState();
+  const a = S.addPerson(st, "Alice").person;
+  S.logWeight(st, a.id, day, 70);
+  S.logWeight(st, a.id, "2026-11-02", 71);
+  const before = S.cloneState(st);
+  S.deletePerson(st, a.id);
+  assert.deepEqual(S.diffState(before, st).map((o) => `${o.op} ${o.kind}/${o.id}`), [
+    `delete entries/${a.id}_${day}`, `delete entries/${a.id}_2026-11-02`, `delete people/${a.id}`,
+  ]);
+});
+
+test("randomId gives safe positive integers", () => {
+  assert.equal(S.randomId(() => [0, 0]), 1);
+  const max = S.randomId(() => [2 ** 32 - 1, 2 ** 32 - 1]);
+  assert.ok(Number.isSafeInteger(max) && max <= 2 ** 48);
+  const ids = new Set(Array.from({ length: 1000 }, () => S.randomId()));
+  assert.equal(ids.size, 1000);
+});
+
+test("stateFromDocs sorts people by name and drops bad or orphaned documents", () => {
+  const st = S.stateFromDocs(
+    [{ id: 5, name: "Zoe" }, { id: 9, name: "amy" }, { id: "x", name: "Bad" }, { id: 3, name: "  " }],
+    [
+      { id: 1, personId: 5, date: day, kg: 60 },
+      { id: 2, personId: 77, date: day, kg: 60 }, // person gone
+      { id: 3, personId: 5, date: "2026-02-30", kg: 60 },
+      { id: 4, personId: 5, date: day, kg: "60" },
+    ]);
+  assert.deepEqual(st.people.map((p) => p.name), ["amy", "Zoe"]);
+  assert.deepEqual(st.entries, [{ id: 1, personId: 5, date: day, kg: 60 }]);
+});
+
+test("validEmail", () => {
+  assert.ok(S.validEmail("ann@example.com"));
+  for (const bad of ["", "ann", "ann@", "a b@example.com", "ann@example", `${"x".repeat(250)}@example.com`]) {
+    assert.ok(!S.validEmail(bad), bad);
+  }
+});

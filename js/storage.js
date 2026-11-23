@@ -5,6 +5,7 @@ import { emptyState, parseState } from "./store.js";
 
 const DATA_KEY = "weighin.data.v1";
 const META_KEY = "weighin.meta.v1";
+const MODE_KEY = "weighin.mode"; // "local" | "cloud": how this browser was last used
 
 function read(key) {
   try {
@@ -66,6 +67,9 @@ export function loadMeta() {
 export function saveMeta(meta) {
   write(META_KEY, JSON.stringify(meta));
 }
+
+export const loadMode = () => read(MODE_KEY);
+export const saveMode = (mode) => write(MODE_KEY, mode);
 
 /** Asks the browser not to evict our data under storage pressure (best effort). */
 export async function requestPersistence() {

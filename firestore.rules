@@ -1,0 +1,100 @@
+rules_version = '2';
+
+// Weigh In access rules.
+//
+// Invites: /allow/{email} lists everyone who can use the cloud version: { name, role, addedBy }.
+//   admin  – exactly one, added by hand in the Firebase console. Invites and removes members.
+//   member – invited/removed by the admin in the app.
+//   Members can only see their own invite; only the admin can list them.
+//
+// Data: /users/{uid}/people/{id} and /users/{uid}/entries/{personId}_{date}.
+//   Private to the signed-in owner, and only while they're invited. Nobody else can read
+//   or write it, including the admin.
+//
+// Everything else is closed.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string;
+    }
+
+    function email() {
+      return request.auth.token.email.lower();
+    }
+
+    function invitePath() {
+      return /databases/$(database)/documents/allow/$(email());
+    }
+
+    function invited() {
+      return signedIn() && exists(invitePath());
+    }
+
+    function isAdmin() {
+      return invited() && get(invitePath()).data.get('role', 'member') == 'admin';
+    }
+
+    function isOwner(uid) {
+      return invited() && request.auth.uid == uid;
+    }
+
+    // ---- invites
+
+    function validMember(d) {
+      return d.keys().hasOnly(['name', 'role', 'addedBy'])
+        && d.get('name', '') is string && d.get('name', '').size() <= 60
+        && d.get('addedBy', '') is string && d.get('addedBy', '').size() <= 254
+        && d.get('role', 'member') == 'member';
+    }
+
+    match /allow/{address} {
+      allow get: if signedIn() && address == email();
+      allow get, list: if isAdmin();
+      // The admin entry itself is only changed in the console.
+      allow create: if isAdmin() && validMember(request.resource.data)
+        && address == address.lower() && address.size() <= 254
+        && address.matches('[^@ ]+@[^@ ]+[.][^@ ]+');
+      allow update: if isAdmin() && resource.data.get('role', 'member') == 'member'
+        && validMember(request.resource.data);
+      allow delete: if isAdmin() && resource.data.get('role', 'member') == 'member';
+    }
+
+    // ---- each user's own data
+
+    function validId(n) {
+      return n is int && n >= 1 && n <= 9007199254740991;
+    }
+
+    function validPerson(id, d) {
+      return d.keys().hasOnly(['id', 'name']) && d.keys().hasAll(['id', 'name'])
+        && validId(d.id) && id == string(d.id)
+        && d.name is string && d.name.size() >= 1 && d.name.size() <= 100;
+    }
+
+    function validEntry(id, d) {
+      return d.keys().hasOnly(['id', 'personId', 'date', 'kg']) && d.keys().hasAll(['id', 'personId', 'date', 'kg'])
+        && validId(d.id) && validId(d.personId)
+        && d.date is string && d.date.matches('[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])')
+        && (d.kg is int || d.kg is float) && d.kg > 0 && d.kg < 700
+        && id == string(d.personId) + '_' + d.date;
+    }
+
+    match /users/{uid} {
+      match /people/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validPerson(id, request.resource.data);
+      }
+      match /entries/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validEntry(id, request.resource.data);
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

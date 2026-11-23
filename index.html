@@ -3,8 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="Track weight for several people and chart it over time. Data stays in your browser.">
+  <meta name="description" content="Track weight for several people and chart it over time. Sign in to keep data private to you, or keep it in your browser.">
   <meta name="color-scheme" content="light dark">
+  <!-- Only this site's own files plus Google sign-in and Firebase may run or be contacted.
+       (127.0.0.1 ports are the local test emulators.) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.googleapis.com https://apis.google.com https://www.google.com http://127.0.0.1:9119 http://127.0.0.1:8096; frame-src https://*.firebaseapp.com https://accounts.google.com https://apis.google.com http://127.0.0.1:9119; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>Weigh In</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -24,6 +27,7 @@
     <button type="button" data-tab="chart">Chart</button>
     <button type="button" data-tab="people">People</button>
     <button type="button" data-tab="data">Data</button>
+    <button type="button" data-tab="admin" hidden>Admin</button>
   </nav>
 
   <dialog id="dialog">

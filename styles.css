@@ -98,7 +98,7 @@ p { margin: 0 0 12px; }
 /* Bottom tab bar */
 .tabs {
   position: fixed; inset: auto 0 0 0;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
   background: var(--surface); border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
 }
@@ -126,7 +126,7 @@ p { margin: 0 0 12px; }
 .icon-btn:hover { background: var(--surface-2); color: var(--text); }
 
 label { display: block; font-weight: 600; margin-bottom: 6px; }
-input[type="text"], input[type="date"], input[type="number"], input:not([type]) {
+input[type="text"], input[type="email"], input[type="date"], input[type="number"], input:not([type]) {
   width: 100%; font: inherit; color: var(--text); background: var(--surface);
   border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; min-height: 44px;
 }
@@ -199,3 +199,8 @@ dialog h2 { font-size: 1.2rem; margin: 0 0 12px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Start screen: sign in, or use without an account */
+.gate { max-width: 420px; margin: 24px auto 0; }
+.gate .btn-block + .btn-block { margin-top: 10px; }
+.gate .muted.small { margin-top: 10px; }

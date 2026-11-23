@@ -1,10 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Set BASE_URL to test a deployed copy, e.g. BASE_URL=https://caomhindev.github.io/weigh-in/
+// npm run test:e2e runs everything against the Firebase emulators (never the real project).
+// Set BASE_URL to test a deployed copy (npm run test:live); sign-in tests are skipped then.
 const remote = process.env.BASE_URL;
 
 export default defineConfig({
   testDir: "tests/e2e",
+  // Sign-in tests need the Firebase emulators (npm run test:e2e starts them).
+  testIgnore: remote ? /cloud\.spec\.js/ : undefined,
   fullyParallel: true,
   reporter: [["list"]],
   use: {

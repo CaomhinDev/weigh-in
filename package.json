@@ -5,10 +5,17 @@
   "scripts": {
     "serve": "python3 -m http.server 8090 --bind 0.0.0.0",
     "test": "node --test tests/*.test.js",
-    "test:e2e": "playwright test",
-    "deploy": "git push origin main"
+    "test:rules": "firebase emulators:exec --only firestore --project demo-weighin 'node --test tests/rules/rules.test.js'",
+    "test:e2e": "firebase emulators:exec --only auth,firestore --project demo-weighin 'playwright test'",
+    "test:all": "npm test && npm run test:rules && npm run test:e2e",
+    "test:live": "BASE_URL=https://caomhindev.github.io/weigh-in/ playwright test",
+    "deploy": "git push origin main",
+    "deploy:rules": "firebase deploy --only firestore:rules"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.1"
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "@playwright/test": "^1.56.1",
+    "firebase": "^11.10.0",
+    "firebase-tools": "^14.27.0"
   }
 }

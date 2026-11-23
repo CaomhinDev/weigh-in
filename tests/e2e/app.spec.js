@@ -11,8 +11,13 @@ const daysAgo = (n) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+// These tests cover "use without signing in" (local mode); cloud.spec.js covers signing in.
 // Fail any test that logs a page error.
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__WEIGHIN_EMULATOR = true; // sign-in available, as when Firebase is set up
+    try { if (!localStorage.getItem("weighin.mode")) localStorage.setItem("weighin.mode", "local"); } catch {}
+  });
   page.on("pageerror", (e) => { throw e; });
   page.on("console", (m) => { if (m.type() === "error") throw new Error(m.text()); });
 });
